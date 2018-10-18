@@ -122,7 +122,7 @@ public class KafkaLowLevelConsumerRoutingTableBuilderTest {
 
       // Create routing tables
       long startTime = System.nanoTime();
-      routingTableBuilder.computeRoutingTableFromExternalView(
+      routingTableBuilder.computeOnExternalViewChange(
           "table_REALTIME", externalView, instanceConfigs);
 
       List<Map<String, List<String>>> routingTables = routingTableBuilder.getRoutingTables();
@@ -176,7 +176,7 @@ public class KafkaLowLevelConsumerRoutingTableBuilderTest {
       externalView.setState(segmentNames.get(i).getSegmentName(), "Server_localhost_1234", "CONSUMING");
     }
 
-    routingTableBuilder.computeRoutingTableFromExternalView("table", externalView, instanceConfigs);
+    routingTableBuilder.computeOnExternalViewChange("table", externalView, instanceConfigs);
     List<Map<String, List<String>>> routingTables = routingTableBuilder.getRoutingTables();
     for (Map<String, List<String>> routingTable : routingTables) {
       for (List<String> segmentsForServer : routingTable.values()) {

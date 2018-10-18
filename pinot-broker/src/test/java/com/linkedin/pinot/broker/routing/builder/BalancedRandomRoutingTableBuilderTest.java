@@ -29,10 +29,12 @@ import org.testng.annotations.Test;
  * Test that random routing tables are really random.
  */
 public class BalancedRandomRoutingTableBuilderTest {
+
   @Test
   public void isRandom() {
     // Build dummy external view
     BalancedRandomRoutingTableBuilder routingTableBuilder = new BalancedRandomRoutingTableBuilder();
+
     List<InstanceConfig> instanceConfigList = new ArrayList<>();
     ExternalView externalView = new ExternalView("dummy");
     externalView.setState("segment_1", "Server_1.2.3.4_1234", "ONLINE");
@@ -51,8 +53,7 @@ public class BalancedRandomRoutingTableBuilderTest {
     instanceConfigList.add(new InstanceConfig("Server_1.2.3.6_3456"));
 
     // Build routing table
-
-    routingTableBuilder.computeRoutingTableFromExternalView("dummy", externalView, instanceConfigList);
+    routingTableBuilder.computeOnExternalViewChange("dummy", externalView, instanceConfigList);
 
     List<Map<String, List<String>>> routingTables = routingTableBuilder.getRoutingTables();
     // Check that at least two routing tables are different
