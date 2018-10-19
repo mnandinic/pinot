@@ -19,7 +19,6 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Function;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
-import com.google.common.collect.MinMaxPriorityQueue;
 import com.google.common.util.concurrent.Uninterruptibles;
 import com.linkedin.pinot.common.config.ColumnPartitionConfig;
 import com.linkedin.pinot.common.config.SegmentPartitionConfig;
@@ -74,6 +73,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.PriorityQueue;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -827,46 +827,77 @@ public class PinotLLCRealtimeSegmentManager {
   }
 
   /**
-   * Given a table name, returns a list of metadata for all segments of that table from the property store
-   * @param tableNameWithType
-   * @return
+   * Returns the LLC realtime segments for the given table.
+   *
+   * @param realtimeTableName Realtime table name
+   * @return List of LLC realtime segment names
    */
   @VisibleForTesting
-  protected List<LLCRealtimeSegmentZKMetadata> getAllSegmentMetadata(String tableNameWithType) {
-    return ZKMetadataProvider.getLLCRealtimeSegmentZKMetadataListForTable(_helixManager.getHelixPropertyStore(),
-        tableNameWithType);
+  protected List<String> getAllSegments(String realtimeTableName) {
+    return ZKMetadataProvider.getLLCRealtimeSegments(_propertyStore, realtimeTableName);
   }
 
   /**
-   * Gets latest 2 metadata. We need only the 2 latest metadata for each partition in order to perform repairs
-   * @param tableNameWithType
-   * @return
+   * Returns the LLC realtime segment ZK metadata for the given table and segment.
+   *
+   * @param realtimeTableName Realtime table name
+   * @param segmentName Segment name (String)
+   * @return LLC realtime segment ZK metadata
    */
   @VisibleForTesting
-  protected Map<Integer, MinMaxPriorityQueue<LLCRealtimeSegmentZKMetadata>> getLatestMetadata(
-      String tableNameWithType) {
-    List<LLCRealtimeSegmentZKMetadata> metadatas = getAllSegmentMetadata(tableNameWithType);
+  protected LLCRealtimeSegmentZKMetadata getSegmentMetadata(String realtimeTableName, String segmentName) {
+    return (LLCRealtimeSegmentZKMetadata) ZKMetadataProvider.getRealtimeSegmentZKMetadata(_propertyStore,
+        realtimeTableName, segmentName);
+  }
 
-    Comparator<LLCRealtimeSegmentZKMetadata> comparator = (o1, o2) -> {
-      LLCSegmentName s1 = new LLCSegmentName(o1.getSegmentName());
-      LLCSegmentName s2 = new LLCSegmentName(o2.getSegmentName());
-      return s2.compareTo(s1);
-    };
+  /**
+   * Returns the latest 2 LLC realtime segment ZK metadata for each partition.
+   *
+   * @param realtimeTableName Realtime table name
+   * @return Map from partition to list of latest LLC realtime segment ZK metadata
+   */
+  @VisibleForTesting
+  protected Map<Integer, List<LLCRealtimeSegmentZKMetadata>> getLatestMetadata(String realtimeTableName) {
+    List<String> llcRealtimeSegments = getAllSegments(realtimeTableName);
 
-    Map<Integer, MinMaxPriorityQueue<LLCRealtimeSegmentZKMetadata>> partitionToLatestSegments = new HashMap<>();
-
-    for (LLCRealtimeSegmentZKMetadata metadata : metadatas) {
-      LLCSegmentName segmentName = new LLCSegmentName(metadata.getSegmentName());
-      final int partitionId = segmentName.getPartitionId();
-      MinMaxPriorityQueue<LLCRealtimeSegmentZKMetadata> latestSegments = partitionToLatestSegments.get(partitionId);
-      if (latestSegments == null) {
-        latestSegments = MinMaxPriorityQueue.orderedBy(comparator).maximumSize(2).create();
-        partitionToLatestSegments.put(partitionId, latestSegments);
+    Comparator<LLCSegmentName> segmentNameComparator = (o1, o2) -> o1.getSequenceNumber() - o2.getSequenceNumber();
+    Map<Integer, PriorityQueue<LLCSegmentName>> partitionToLatestSegmentsMap = new HashMap<>();
+    for (String llcRealtimeSegment : llcRealtimeSegments) {
+      LLCSegmentName segmentName = new LLCSegmentName(llcRealtimeSegment);
+      PriorityQueue<LLCSegmentName> latestSegments =
+          partitionToLatestSegmentsMap.computeIfAbsent(segmentName.getPartitionId(),
+              k -> new PriorityQueue<>(2, segmentNameComparator));
+      if (latestSegments.size() < 2) {
+        latestSegments.offer(segmentName);
+      } else {
+        if (latestSegments.peek().getSequenceNumber() < segmentName.getSequenceNumber()) {
+          latestSegments.poll();
+          latestSegments.offer(segmentName);
+        }
       }
-      latestSegments.offer(metadata);
     }
 
-    return partitionToLatestSegments;
+    Map<Integer, List<LLCRealtimeSegmentZKMetadata>> partitionToLatestMetadataMap = new HashMap<>();
+    for (Map.Entry<Integer, PriorityQueue<LLCSegmentName>> entry : partitionToLatestSegmentsMap.entrySet()) {
+      PriorityQueue<LLCSegmentName> latestSegments = entry.getValue();
+      String secondLatestSegment = null;
+      if (latestSegments.size() == 2) {
+        secondLatestSegment = latestSegments.poll().getSegmentName();
+      }
+      assert latestSegments.size() == 1;
+      @SuppressWarnings("ConstantConditions")
+      String latestSegment = latestSegments.poll().getSegmentName();
+
+      List<LLCRealtimeSegmentZKMetadata> latestMetadata = new ArrayList<>(2);
+      latestMetadata.add(getSegmentMetadata(realtimeTableName, latestSegment));
+      if (secondLatestSegment != null) {
+        latestMetadata.add(getSegmentMetadata(realtimeTableName, secondLatestSegment));
+      }
+
+      partitionToLatestMetadataMap.put(entry.getKey(), latestMetadata);
+    }
+
+    return partitionToLatestMetadataMap;
   }
 
   /**
@@ -1033,8 +1064,7 @@ public class PinotLLCRealtimeSegmentManager {
     final long now = getCurrentTimeMs();
 
     // Get the metadata for the latest 2 segments of each partition
-    Map<Integer, MinMaxPriorityQueue<LLCRealtimeSegmentZKMetadata>> partitionToLatestMetadata =
-        getLatestMetadata(tableNameWithType);
+    Map<Integer, List<LLCRealtimeSegmentZKMetadata>> partitionToLatestMetadata = getLatestMetadata(tableNameWithType);
 
     // Find partitions for which there is no metadata at all. These are new partitions that we need to start consuming.
     Set<Integer> newPartitions = new HashSet<>(partitionCount);
@@ -1078,9 +1108,10 @@ public class PinotLLCRealtimeSegmentManager {
     //    a. Create a new segment (with the next seq number)
     //       and restart consumption from the same offset (if possible) or a newer offset (if realtime stream does not have the same offset).
     //       In latter case, report data loss.
-    for (Map.Entry<Integer, MinMaxPriorityQueue<LLCRealtimeSegmentZKMetadata>> entry : partitionToLatestMetadata.entrySet()) {
+    for (Map.Entry<Integer, List<LLCRealtimeSegmentZKMetadata>> entry : partitionToLatestMetadata.entrySet()) {
       int partition = entry.getKey();
-      LLCRealtimeSegmentZKMetadata latestMetadata = entry.getValue().pollFirst();
+      List<LLCRealtimeSegmentZKMetadata> latestMetadataList = entry.getValue();
+      LLCRealtimeSegmentZKMetadata latestMetadata = latestMetadataList.get(0);
       final String segmentId = latestMetadata.getSegmentName();
       final LLCSegmentName segmentName = new LLCSegmentName(segmentId);
 
@@ -1171,7 +1202,10 @@ public class PinotLLCRealtimeSegmentManager {
             partition, segmentId);
 
         // If there was a prev segment in the same partition, then we need to fix it to be ONLINE.
-        LLCRealtimeSegmentZKMetadata prevMetadata = entry.getValue().pollLast();
+        LLCRealtimeSegmentZKMetadata prevMetadata = null;
+        if (latestMetadataList.size() == 2) {
+          prevMetadata = latestMetadataList.get(1);
+        }
 
         if (prevMetadata == null && skipNewPartitions) {
           continue;

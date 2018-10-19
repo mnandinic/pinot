@@ -16,7 +16,6 @@
 package com.linkedin.pinot.controller.helix.core.realtime;
 
 import com.google.common.collect.Lists;
-import com.google.common.collect.MinMaxPriorityQueue;
 import com.google.common.io.Files;
 import com.linkedin.pinot.common.Utils;
 import com.linkedin.pinot.common.config.IndexingConfig;
@@ -761,7 +760,7 @@ public class PinotLLCRealtimeSegmentManagerTest {
     Map<String, Map<String, String>> mapFields = idealState.getRecord().getMapFields();
 
     // latest metadata for each partition
-    Map<Integer, MinMaxPriorityQueue<LLCRealtimeSegmentZKMetadata>> latestMetadata =
+    Map<Integer, List<LLCRealtimeSegmentZKMetadata>> latestMetadata =
         segmentManager.getLatestMetadata(tableConfig.getTableName());
 
     // latest segment in ideal state for each partition
@@ -771,12 +770,12 @@ public class PinotLLCRealtimeSegmentManagerTest {
     // Assert that we have a latest metadata and segment for each partition
     List<String> latestSegmentNames = new ArrayList<>();
     for (int p = 0; p < expectedPartitionAssignment.getNumPartitions(); p++) {
-      MinMaxPriorityQueue<LLCRealtimeSegmentZKMetadata> llcRealtimeSegmentZKMetadata = latestMetadata.get(p);
+      List<LLCRealtimeSegmentZKMetadata> llcRealtimeSegmentZKMetadata = latestMetadata.get(p);
       LLCSegmentName latestLlcSegment = partitionToLatestSegments.get(String.valueOf(p));
       Assert.assertNotNull(llcRealtimeSegmentZKMetadata);
-      Assert.assertNotNull(llcRealtimeSegmentZKMetadata.peekFirst());
+      Assert.assertNotNull(llcRealtimeSegmentZKMetadata.get(0));
       Assert.assertNotNull(latestLlcSegment);
-      Assert.assertEquals(latestLlcSegment.getSegmentName(), llcRealtimeSegmentZKMetadata.peekFirst().getSegmentName());
+      Assert.assertEquals(latestLlcSegment.getSegmentName(), llcRealtimeSegmentZKMetadata.get(0).getSegmentName());
       latestSegmentNames.add(latestLlcSegment.getSegmentName());
     }
 
@@ -1354,8 +1353,13 @@ public class PinotLLCRealtimeSegmentManagerTest {
     }
 
     @Override
-    protected List<LLCRealtimeSegmentZKMetadata> getAllSegmentMetadata(String tableNameWithType) {
-      return Lists.newArrayList(_metadataMap.values());
+    protected List<String> getAllSegments(String realtimeTableName) {
+      return Lists.newArrayList(_metadataMap.keySet());
+    }
+
+    @Override
+    protected LLCRealtimeSegmentZKMetadata getSegmentMetadata(String realtimeTableName, String segmentName) {
+      return _metadataMap.get(segmentName);
     }
 
     @Override
