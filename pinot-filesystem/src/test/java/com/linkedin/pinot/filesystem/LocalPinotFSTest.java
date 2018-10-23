@@ -64,6 +64,7 @@ public class LocalPinotFSTest {
     URI testFileUri = testFile.toURI();
     // Check whether a directory exists
     Assert.assertTrue(localPinotFS.exists(_absoluteTmpDirPath.toURI()));
+    Assert.assertTrue(localPinotFS.lastModified(_absoluteTmpDirPath.toURI()) > 0L);
     Assert.assertTrue(localPinotFS.isDirectory(_absoluteTmpDirPath.toURI()));
     // Check whether a file exists
     Assert.assertTrue(localPinotFS.exists(testFileUri));
@@ -75,7 +76,7 @@ public class LocalPinotFSTest {
     Assert.assertTrue(!localPinotFS.exists(secondTestFileUri));
 
     localPinotFS.copy(testFileUri, secondTestFileUri);
-    Assert.assertEquals(2, localPinotFS.listFiles(_absoluteTmpDirPath.toURI()).length);
+    Assert.assertEquals(3, localPinotFS.listFiles(_absoluteTmpDirPath.toURI()).length);
 
     // Check file copy worked when file was not created
     Assert.assertTrue(localPinotFS.exists(secondTestFileUri));

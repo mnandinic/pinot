@@ -116,5 +116,10 @@ public class PinotFSFactoryTest {
     public boolean isDirectory(URI uri) throws IOException {
       return false;
     }
+
+    @Override
+    public long lastModified(URI uri) throws IOException {
+      return 0L;
+    }
   }
 }
